@@ -116,7 +116,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## 🤝 Credits
 
-* **Built with ❤️ by [@YashvirGaming](https://github.com/YashvirGaming) — [Telegram: @therealyashvirgaming](https://t.me/therealyashvirgaming)** ![GitHub stars](https://img.shields.io/github/stars/yashvirgaming/Gotlsclient?style=social) ![Twitter Follow](https://img.shields.io/twitter/follow/yashvir__gaming?style=social)
+* **Built with ❤️ by [@YashvirGaming](https://github.com/YashvirGaming) — [Telegram: @therealyashvirgaming](https://t.me/therealyashvirgaming)** ![GitHub stars](https://img.shields.io/github/stars/YashvirGaming/GoTlsClient?style=social) ![Twitter Follow](https://img.shields.io/twitter/follow/yashvir__gaming?style=social)
 * Thanks to all testers and contributors for feedback!
 
 
