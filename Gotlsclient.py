@@ -5,8 +5,35 @@ from urllib.parse import quote, urljoin
 from collections import OrderedDict
 import tls_client   # pip install tls-client
 import uvicorn
+from colorama import init, Fore, Style
+init(autoreset=True)
 
 app = FastAPI()
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    import time
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = (time.time() - start_time) * 1000
+
+    code = response.status_code
+    if 200 <= code < 300:
+        color = Fore.GREEN
+    elif 300 <= code < 400:
+        color = Fore.CYAN
+    elif 400 <= code < 500:
+        color = Fore.YELLOW
+    else:
+        color = Fore.RED
+
+    print(
+        f"{Fore.MAGENTA}[TLS Proxy]{Style.RESET_ALL} "
+        f"{request.method} {request.url} "
+        f"→ {color}{code}{Style.RESET_ALL} "
+        f"({process_time:.1f} ms)"
+    )
+    return response
 
 def format_proxy(raw_proxy: str):
     raw = raw_proxy.replace("http://", "").replace("https://", "")
@@ -93,7 +120,16 @@ async def reverse_proxy(request: Request):
     except Exception as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
 
+
 if __name__ == "__main__":
+    subtitle = f"""
+{Fore.CYAN}====================================================
+   🚀 {Fore.GREEN}GoTLS Proxy {Fore.CYAN}• {Fore.MAGENTA}Made with ♥ by Yashvir Gaming
+   {Fore.YELLOW}• Telegram: https://t.me/therealyashvirgaming
+{Fore.CYAN}===================================================={Style.RESET_ALL}
+"""
+    print(subtitle)
+
     port = int(input("Enter port (Default 9000): ") or 9000)
-    print(f"Starting TLS proxy with global fingerprinting on http://localhost:{port}")
+    print(f"{Fore.GREEN}Starting TLS proxy with global fingerprinting on {Fore.YELLOW}http://localhost:{port}{Style.RESET_ALL}")
     uvicorn.run("Gotlsclient:app", host="0.0.0.0", port=port, reload=False)
