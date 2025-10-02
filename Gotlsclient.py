@@ -1,18 +1,21 @@
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-import os, asyncio
-from urllib.parse import quote, urljoin
 from collections import OrderedDict
+from urllib.parse import quote, urljoin
+import asyncio
+import time
+
 import tls_client   # pip install tls-client
 import uvicorn
+
 from colorama import init, Fore, Style
 init(autoreset=True)
 
 app = FastAPI()
 
+
 @app.middleware("http")
-async def log_requests(request, call_next):
-    import time
+async def log_requests(request: Request, call_next):
     start_time = time.time()
     response = await call_next(request)
     process_time = (time.time() - start_time) * 1000
@@ -35,7 +38,10 @@ async def log_requests(request, call_next):
     )
     return response
 
+
 def format_proxy(raw_proxy: str):
+    if not raw_proxy:
+        return None
     raw = raw_proxy.replace("http://", "").replace("https://", "")
     parts = raw.split(":")
     if len(parts) == 4:
@@ -45,6 +51,7 @@ def format_proxy(raw_proxy: str):
         return raw_proxy
     return None
 
+
 @app.api_route("/", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def reverse_proxy(request: Request):
     headers = request.headers
@@ -53,6 +60,7 @@ async def reverse_proxy(request: Request):
     kc_protocol = headers.get("x-kc-protocol")
     kc_headerorder = headers.get("x-kc-headerorder")
     kc_fingerprint = headers.get("x-kc-fingerprint", "chrome_120")  # Default fingerprint
+    kc_delay = headers.get("x-kc-delay")
 
     if not kc_url:
         return JSONResponse(status_code=400, content={"error": "Missing x-kc-url header"})
@@ -63,8 +71,7 @@ async def reverse_proxy(request: Request):
         scheme = "https" if kc_protocol == "2" else "http"
         kc_url = urljoin(f"{scheme}://{host}", kc_url)
 
-    # Optional delay
-    kc_delay = headers.get("x-kc-delay")
+    # Optional delay (ms)
     if kc_delay and kc_delay.isdigit():
         await asyncio.sleep(int(kc_delay) / 1000)
 
@@ -80,8 +87,9 @@ async def reverse_proxy(request: Request):
     if kc_headerorder:
         ordered = OrderedDict()
         for key in kc_headerorder.split(","):
-            if key.strip() in forward_headers_dict:
-                ordered[key.strip()] = forward_headers_dict[key.strip()]
+            key = key.strip()
+            if key in forward_headers_dict:
+                ordered[key] = forward_headers_dict[key]
         for k, v in forward_headers_dict.items():
             if k not in ordered:
                 ordered[k] = v
@@ -89,24 +97,37 @@ async def reverse_proxy(request: Request):
     else:
         forward_headers = forward_headers_dict
 
-    # Proxy handling
     proxy_url = format_proxy(kc_proxy) if kc_proxy else None
 
     try:
         session = tls_client.Session(
-            client_identifier=kc_fingerprint,   # e.g. "chrome_120", "safari_17"
+            client_identifier=kc_fingerprint,
             random_tls_extension_order=True
         )
 
         method = request.method.upper()
+
+        # run blocking tls_client calls in a thread to avoid blocking the event loop
         if method == "POST":
-            resp = session.post(kc_url, headers=forward_headers, data=body, proxy=proxy_url, timeout_seconds=30)
+            def do_post():
+                return session.post(kc_url, headers=forward_headers, data=body, proxy=proxy_url, timeout_seconds=30)
+            resp = await asyncio.to_thread(do_post)
+
         elif method == "GET":
-            resp = session.get(kc_url, headers=forward_headers, proxy=proxy_url, timeout_seconds=30)
+            def do_get():
+                return session.get(kc_url, headers=forward_headers, proxy=proxy_url, timeout_seconds=30)
+            resp = await asyncio.to_thread(do_get)
+
         elif method == "PUT":
-            resp = session.put(kc_url, headers=forward_headers, data=body, proxy=proxy_url, timeout_seconds=30)
+            def do_put():
+                return session.put(kc_url, headers=forward_headers, data=body, proxy=proxy_url, timeout_seconds=30)
+            resp = await asyncio.to_thread(do_put)
+
         elif method == "DELETE":
-            resp = session.delete(kc_url, headers=forward_headers, data=body, proxy=proxy_url, timeout_seconds=30)
+            def do_delete():
+                return session.delete(kc_url, headers=forward_headers, data=body, proxy=proxy_url, timeout_seconds=30)
+            resp = await asyncio.to_thread(do_delete)
+
         else:
             return JSONResponse(status_code=405, content={"error": f"Unsupported method: {method}"})
 
@@ -130,6 +151,6 @@ if __name__ == "__main__":
 """
     print(subtitle)
 
-    port = int(input("Enter port (Default 9000): ") or 9000)
+    port = 9000
     print(f"{Fore.GREEN}Starting TLS proxy with global fingerprinting on {Fore.YELLOW}http://localhost:{port}{Style.RESET_ALL}")
     uvicorn.run("Gotlsclient:app", host="0.0.0.0", port=port, reload=False)
