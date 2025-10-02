@@ -1,106 +1,93 @@
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-import httpx
-import os
-import uvicorn
-from typing import Optional
-import asyncio
-from urllib.parse import quote, urljoin, urlparse
+import os, asyncio
+from urllib.parse import quote, urljoin
 from collections import OrderedDict
+import tls_client   # pip install tls-client
+import uvicorn
 
 app = FastAPI()
 
-def format_proxy(raw_proxy: str) -> Optional[str]:
-    # Remove protocol temporarily
+def format_proxy(raw_proxy: str):
     raw = raw_proxy.replace("http://", "").replace("https://", "")
-
     parts = raw.split(":")
     if len(parts) == 4:
         ip, port, user, pwd = parts
-        user_enc = quote(user)
-        pwd_enc = quote(pwd)
-        return f"http://{user_enc}:{pwd_enc}@{ip}:{port}"
-
-    # Already formatted?
+        return f"http://{quote(user)}:{quote(pwd)}@{ip}:{port}"
     if "@" in raw_proxy:
         return raw_proxy
-
     return None
 
-@app.api_route("/", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"])
+@app.api_route("/", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
 async def reverse_proxy(request: Request):
     headers = request.headers
-
     kc_url = headers.get("x-kc-url")
     kc_proxy = headers.get("x-kc-proxy")
     kc_protocol = headers.get("x-kc-protocol")
     kc_headerorder = headers.get("x-kc-headerorder")
+    kc_fingerprint = headers.get("x-kc-fingerprint", "chrome_120")  # Default fingerprint
 
     if not kc_url:
         return JSONResponse(status_code=400, content={"error": "Missing x-kc-url header"})
 
-    # Auto-convert relative URL to full URL using the Host header
+    # Handle relative paths
     if kc_url.startswith("/"):
         host = headers.get("host")
         scheme = "https" if kc_protocol == "2" else "http"
         kc_url = urljoin(f"{scheme}://{host}", kc_url)
 
+    # Optional delay
     kc_delay = headers.get("x-kc-delay")
     if kc_delay and kc_delay.isdigit():
         await asyncio.sleep(int(kc_delay) / 1000)
 
     body = await request.body()
 
-    # Step 1: Collect headers that should be forwarded
+    # Forward headers (remove control headers)
     forward_headers_dict = {
-        key: value for key, value in headers.items()
-        if not key.lower().startswith("x-kc-") and key.lower() != "host"
+        k: v for k, v in headers.items()
+        if not k.lower().startswith("x-kc-") and k.lower() != "host"
     }
 
-    # Step 2: Enforce header order if provided
+    # Respect header order if provided
     if kc_headerorder:
-        ordered_headers = OrderedDict()
+        ordered = OrderedDict()
         for key in kc_headerorder.split(","):
-            key = key.strip()
-            if key in forward_headers_dict:
-                ordered_headers[key] = forward_headers_dict[key]
-        for key, value in forward_headers_dict.items():
-            if key not in ordered_headers:
-                ordered_headers[key] = value
-        forward_headers = ordered_headers
+            if key.strip() in forward_headers_dict:
+                ordered[key.strip()] = forward_headers_dict[key.strip()]
+        for k, v in forward_headers_dict.items():
+            if k not in ordered:
+                ordered[k] = v
+        forward_headers = ordered
     else:
         forward_headers = forward_headers_dict
 
-    # Step 3: Format proxy
-    transport = None
-    if kc_proxy:
-        formatted = format_proxy(kc_proxy)
-        if not formatted:
-            return JSONResponse(status_code=400, content={"error": "Invalid proxy format"})
+    # Proxy handling
+    proxy_url = format_proxy(kc_proxy) if kc_proxy else None
 
-        transport = httpx.AsyncHTTPTransport(proxy=formatted)
-
-    # Step 4: Make the request
     try:
-        method = request.method.upper()
+        session = tls_client.Session(
+            client_identifier=kc_fingerprint,   # e.g. "chrome_120", "safari_17"
+            random_tls_extension_order=True
+        )
 
-        async with httpx.AsyncClient(transport=transport, verify=False, timeout=30.0) as client:
-            if method == "POST":
-                resp = await client.post(kc_url, content=body, headers=forward_headers)
-            elif method == "GET":
-                resp = await client.get(kc_url, headers=forward_headers)
-            elif method == "PUT":
-                resp = await client.put(kc_url, content=body, headers=forward_headers)
-            elif method == "DELETE":
-                resp = await client.delete(kc_url, content=body, headers=forward_headers)
-            else:
-                return JSONResponse(status_code=405, content={"error": f"Unsupported method: {method}"})
+        method = request.method.upper()
+        if method == "POST":
+            resp = session.post(kc_url, headers=forward_headers, data=body, proxy=proxy_url, timeout_seconds=30)
+        elif method == "GET":
+            resp = session.get(kc_url, headers=forward_headers, proxy=proxy_url, timeout_seconds=30)
+        elif method == "PUT":
+            resp = session.put(kc_url, headers=forward_headers, data=body, proxy=proxy_url, timeout_seconds=30)
+        elif method == "DELETE":
+            resp = session.delete(kc_url, headers=forward_headers, data=body, proxy=proxy_url, timeout_seconds=30)
+        else:
+            return JSONResponse(status_code=405, content={"error": f"Unsupported method: {method}"})
 
         return Response(
             content=resp.content,
             status_code=resp.status_code,
             headers={k: v for k, v in resp.headers.items()
-                     if k.lower() not in ["content-encoding", "transfer-encoding", "content-length"]},
+                     if k.lower() not in ["content-encoding", "transfer-encoding", "content-length"]}
         )
 
     except Exception as e:
@@ -108,5 +95,5 @@ async def reverse_proxy(request: Request):
 
 if __name__ == "__main__":
     port = int(input("Enter port (Default 9000): ") or 9000)
-    print(f"Starting proxy on http://localhost:{port}")
+    print(f"Starting TLS proxy with global fingerprinting on http://localhost:{port}")
     uvicorn.run("Gotlsclient:app", host="0.0.0.0", port=port, reload=False)
