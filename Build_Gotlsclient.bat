@@ -1,24 +1,21 @@
 @echo off
 set SCRIPT_NAME=Gotlsclient.py
-set ICON=icon.ico
 
 echo ==========================================
-echo  Building %SCRIPT_NAME% with Nuitka
+echo  Building %SCRIPT_NAME% with Nuitka (CLI)
 echo ==========================================
 
-REM Clean old EXE
+REM Remove old EXE if it exists
 if exist %~nSCRIPT_NAME%.exe del %~nSCRIPT_NAME%.exe
 
-REM Nuitka build
+REM Nuitka build (no tkinter, no icon, pure CLI)
 python -m nuitka ^
  --standalone ^
  --onefile ^
  --include-module=Gotlsclient ^
- --enable-plugin=tk-inter ^
- --windows-console-mode=disable ^
+ --windows-console-mode=attach ^
  --jobs=12 ^
  --output-dir=. ^
- --windows-icon-from-ico=%ICON% ^
  %SCRIPT_NAME%
 
 echo ==========================================
